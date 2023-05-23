@@ -1,24 +1,17 @@
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-from time import sleep
 import re
 from pyhunter import PyHunter
 from googleapiclient.discovery import build
-import urllib.parse
 from googleapiclient.errors import HttpError
 
-
-# api codes 
+# API codes
 cx = "c2a71ee1a90414df8"
 google_api = "AIzaSyBslETljLKindUxA24f4Rln3klXpV49R5Q"
 # Initialize the Hunter API client
 hunter_api_key = "2f6fdf02f290f415ffed1678b84e8e61feaadd82"
 hunter = PyHunter(hunter_api_key)
 
-
-
-# code after api and before old amazon extracting python script
 
 def format_query_string(author: str, keyword: str):
     query = f"{author} {keyword}"
@@ -28,7 +21,7 @@ def format_query_string(author: str, keyword: str):
 def google_search(query, max_results=10):
     try:
         service = build("customsearch", "v1", developerKey=google_api)
-        res = service.cse().list(q=query, cx=cx,  num=max_results).execute()
+        res = service.cse().list(q=query, cx=cx, num=max_results).execute()
         if 'items' in res:
             return res['items']
         else:
@@ -71,8 +64,48 @@ def score_email(email, author_name, book_title):
             if part in email_parts:
                 score += 0.5
 
+    # Additional criteria for email scoring
+    if author_name.lower() in email.lower():
+        score += 1
+
     return score
 
+
+def extract_social_media_profiles(author):
+    print(f"Extracting social media profiles for {author}")
+    social_media_profiles = []
+
+    # Define the Google search query string
+    query_string = f"{author} author instagram OR twitter OR facebook"
+
+    search_results = google_search(query_string)
+
+    social_media_tags = {
+        'twitter.com': 'Twitter',
+        'linkedin.com': 'LinkedIn',
+        'facebook.com': 'Facebook',
+        'instagram.com': 'Instagram'
+        # Add more social media platforms as needed
+    }
+
+    for item in search_results:
+        link = item['link']
+        for platform, name in social_media_tags.items():
+            if platform in link:
+                social_media_profiles.append((name, link))
+                break
+
+    return social_media_profiles
+
+
+def score_social_media_profile(profile_url, author_name):
+    score = 0
+
+    # Check if the profile handle or username contains the author's name
+    if author_name.lower() in profile_url.lower():
+        score += 1
+
+    return score
 
 def get_author_contact(author_name):
     queries = [
@@ -83,11 +116,16 @@ def get_author_contact(author_name):
         format_query_string(author_name, "author profile"),
         format_query_string(author_name, "linkedin"),
         format_query_string(author_name, "goodreads author"),
-        # format_query_string(author_name, "blog"),
-        # format_query_string(author_name, "publisher"),
+        # Add more relevant queries
     ]
 
-    emails = []
+    try:
+        social_media_profiles = extract_social_media_profiles(author_name)
+    except Exception as e:
+        print(f"An error occurred while extracting social media profiles for {author_name}: {e}")
+        social_media_profiles = []
+
+    contacts = []
 
     for query in queries:
         results = google_search(query)
@@ -100,59 +138,29 @@ def get_author_contact(author_name):
                 url = result["link"]
                 response = requests.get(url)
                 soup = BeautifulSoup(response.content, "html.parser")
-                emails.extend(extract_emails(soup))
+                emails = extract_emails(soup)
+
+                for email in emails:
+                    score = score_email(email, author_name, None)
+                    if score > 0:
+                        contacts.append(
+                            {"type": "email", "value": email, "confidence": score})
+
             except HttpError as e:
                 print(
                     f"An error occurred while processing the query response url: {url}")
                 print(e)
                 return None
-
-    scored_emails = [(email, score_email(email, author_name, None))
-                     for email in emails]
-    scored_emails.sort(key=lambda x: x[1], reverse=True)
-
-    return scored_emails
-
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0',
-    'Accept-Language': 'en-US, en;q=0.5'
-}
-
-search_query = 'books'.replace(' ', '+')
-base_url = 'https://www.amazon.com/s?k=books&i=stripbooks&sprefix=b%2Cstripbooks%2C266&ref=nb_sb_ss_ts-doa-p_1_1'.format(search_query)
-
-items = []
-for i in range(1, 5):
-    print('Processing {0}...'.format(base_url + '&page={0}'.format(i)))
-    response = requests.get(base_url + '&page={0}'.format(i), headers=headers)
-    soup = BeautifulSoup(response.content, 'html.parser')
     
-    results = soup.find_all('div', {'class': 's-result-item', 'data-component-type': 's-search-result'})
+    for profile_name, profile_url in social_media_profiles:
+        score = score_social_media_profile(
+            profile_url, author_name)
+        if score > 0:
+            contacts.append(
+                {"type": "social_media", "name": profile_name, "url": profile_url, "confidence": score})
+            
+    contacts.sort(key=lambda x: x['confidence'], reverse=True)
+    valid_contacts = [
+        contact for contact in contacts if contact['confidence'] > 0]
 
-    for result in results:
-        rank_element = result.find('span', {'class': 's-main-slot'})
-        rank = rank_element.text.strip() if rank_element else 'N/A'
-
-        product_name = result.h2.text
-
-        try:
-            author = result.find('a', {'class': 'a-size-base a-link-normal'}).text.strip()
-        except AttributeError:
-            author = 'N/A'
-
-        description = result.find('span', {'class': 'a-size-base-plus a-color-base a-text-normal'}).text.strip()
-
-        try:
-            price1 = result.find('span', {'class': 'a-price-whole'}).text
-            price2 = result.find('span', {'class': 'a-price-fraction'}).text
-            price = float(price1 + price2)
-            product_url = 'https://amazon.com' + result.h2.a['href']
-            items.append([rank, product_name, author, description])
-        except AttributeError:
-            continue
-    sleep(1.5)
-    
-df = pd.DataFrame(items, columns=['rank', 'product', 'author', 'description'])
-df.to_csv('{0}.csv'.format(search_query), index=False)
-
-
+    return valid_contacts
