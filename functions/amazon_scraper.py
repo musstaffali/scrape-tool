@@ -4,10 +4,10 @@ import re
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
-from bs4 import BeautifulSoup
 from firebase_admin import initialize_app, firestore, credentials
+from author_contact_scraper import get_author_contact
 
-cred = credentials.Certificate("service_account.json")
+cred = credentials.Certificate("functions/service_account.json")
 initialize_app(cred)
 
 db = firestore.client()
@@ -47,12 +47,6 @@ def scrape_amazon_books(amazon_url):
 
     # Parse the page with BeautifulSoup
     soup = BeautifulSoup(page_source, 'html.parser')
-
-    # response = requests.get(amazon_url, headers=headers)
-    # if response.status_code == 503:
-    #     raise Exception("503 Service Unavailable error. Retry after a while.")
-
-    # soup = BeautifulSoup(response.content, 'html.parser')
 
     results = soup.find_all('div', {
                             'class': 'a-section a-spacing-none puis-padding-right-small s-title-instructions-style'})
@@ -131,24 +125,28 @@ def store_authors():
                 # Generate a new unique id for the author
                 author_id = str(uuid.uuid4())
                 user_doc = db.collection('authors').document(author_id)
-
-                # Add the author to the author map
-                author_map.set({'id': author_id})
-
+                
+                print('set document and prepare to fetch contact information')
                 # Fetch contacts
-                # contacts = get_author_contact(author)
+                contacts = get_author_contact(author)
+                print('fetched contact information')
 
-                # emails = [contact['value'] for contact in contacts if contact['type'] == 'email']
-                # social_media_profiles = [{'name': contact['name'], 'url': contact['url']} for contact in contacts if contact['type'] == 'social_media']
-
+                emails = [contact['value'] for contact in contacts if contact['type'] == 'email']
+                social_media_profiles = [{'name': contact['name'], 'url': contact['url']} for contact in contacts if contact['type'] == 'social_media']                        
                 user_doc.set({
                     'author': author,
                     'book': [book],
+                    'emails': emails,
+                    'socials': social_media_profiles,
                     'created_at': firestore.SERVER_TIMESTAMP
                 })
 
                 contact_info.append(author)
 
+                # Add the author to the author map
+                author_map.set({'id': author_id})
+        print('Authors stored successfully')
+        print(contact_info)
         return {'message': 'Authors stored successfully', 'authors': contact_info}
     except Exception as e:
         # Handle the exception

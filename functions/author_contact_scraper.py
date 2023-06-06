@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -75,8 +77,10 @@ def extract_social_media_profiles(author):
     print(f"Extracting social media profiles for {author}")
     social_media_profiles = []
 
+    sanitized_author = re.sub(r'[^\w\s]', '', author)
+
     # Define the Google search query string
-    query_string = f"{author} author instagram OR twitter OR facebook"
+    query_string = f"{sanitized_author} author instagram OR twitter OR facebook"
 
     search_results = google_search(query_string)
 
@@ -85,13 +89,13 @@ def extract_social_media_profiles(author):
         'linkedin.com': 'LinkedIn',
         'facebook.com': 'Facebook',
         'instagram.com': 'Instagram'
-        # Add more social media platforms as needed
     }
 
     for item in search_results:
         link = item['link']
+        snippet = item.get('snippet', '')
         for platform, name in social_media_tags.items():
-            if platform in link:
+            if platform in link and author.lower() in snippet.lower():
                 social_media_profiles.append((name, link))
                 break
 
@@ -109,56 +113,67 @@ def score_social_media_profile(profile_url, author_name):
 
 def get_author_contact(author_name):
     queries = [
-        format_query_string(author_name, "email"),
-        format_query_string(author_name, "contact"),
-        format_query_string(author_name, "author site"),
-        format_query_string(author_name, "author bio"),
-        format_query_string(author_name, "author profile"),
-        format_query_string(author_name, "linkedin"),
-        format_query_string(author_name, "goodreads author"),
+        format_query_string(author_name, "author email"),
+        # format_query_string(author_name, "author contact information"),
+        # format_query_string(author_name, "author website"),
+        # format_query_string(author_name, "author bio"),
+        # format_query_string(author_name, "author social profile"),
+        # format_query_string(author_name, "author linkedin"),
+        # format_query_string(author_name, "goodreads author"),
         # Add more relevant queries
     ]
 
-    try:
-        social_media_profiles = extract_social_media_profiles(author_name)
-    except Exception as e:
-        print(f"An error occurred while extracting social media profiles for {author_name}: {e}")
-        social_media_profiles = []
+    # try:
+    #     social_media_profiles = extract_social_media_profiles(author_name)
+    # except Exception as e:
+    #     print(f"An error occurred while extracting social media profiles for {author_name}: {e}")
+    #     social_media_profiles = []
 
     contacts = []
+       
+    # for profile_name, profile_url in social_media_profiles:
+    #     score = score_social_media_profile(
+    #         profile_url, author_name)
+    #     if score > 0:
+    #         contacts.append(
+    #             {"type": "social_media", "name": profile_name, "url": profile_url, "confidence": score})
 
-    for query in queries:
-        results = google_search(query)
-        if results is None:
-            print(f"Error occurred while processing the query: {query}")
-            continue
-
-        for result in results:
+   # Use a ThreadPoolExecutor to make the Google Search requests in parallel
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_query = {executor.submit(google_search, query): query for query in queries}
+        for future in concurrent.futures.as_completed(future_to_query):
+            query = future_to_query[future]
             try:
-                url = result["link"]
-                response = requests.get(url)
-                soup = BeautifulSoup(response.content, "html.parser")
-                emails = extract_emails(soup)
+                results = future.result()
+            except Exception as e:
+                print(f"Error occurred while processing the query: {query}")
+                continue
 
-                for email in emails:
-                    score = score_email(email, author_name, None)
-                    if score > 0:
+            for result in results:
+                try:
+                    url = result["link"]
+                    try:
+                        response = requests.get(url, timeout=5)
+                    except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
+                        print(f"Error occurred for url: {url}")
+                        print(e)
+                        continue  # Skip the current iteration and move to the next one
+
+                    soup = BeautifulSoup(response.content, "html.parser")
+                    emails = extract_emails(soup)
+
+                    for email in emails:
+                        # score = score_email(email, author_name, None)
+                        # if score > 0:
                         contacts.append(
-                            {"type": "email", "value": email, "confidence": score})
+                            {"type": "email", "value": email, "confidence": 1})
 
-            except HttpError as e:
-                print(
-                    f"An error occurred while processing the query response url: {url}")
-                print(e)
-                return None
-    
-    for profile_name, profile_url in social_media_profiles:
-        score = score_social_media_profile(
-            profile_url, author_name)
-        if score > 0:
-            contacts.append(
-                {"type": "social_media", "name": profile_name, "url": profile_url, "confidence": score})
-            
+                except HttpError as e:
+                    print(
+                        f"An error occurred while processing the query response url: {url}")
+                    print(e)
+                    # Don't return None, just continue with the next URL
+
     contacts.sort(key=lambda x: x['confidence'], reverse=True)
     valid_contacts = [
         contact for contact in contacts if contact['confidence'] > 0]
