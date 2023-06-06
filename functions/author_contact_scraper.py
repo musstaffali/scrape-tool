@@ -93,9 +93,9 @@ def extract_social_media_profiles(author):
 
     for item in search_results:
         link = item['link']
-        snippet = item.get('snippet', '')
         for platform, name in social_media_tags.items():
-            if platform in link and author.lower() in snippet.lower():
+            first_name, last_name = sanitized_author.lower().split()
+            if platform in link and (first_name in link.lower() or last_name in link.lower()):
                 social_media_profiles.append((name, link))
                 break
 
@@ -103,7 +103,7 @@ def extract_social_media_profiles(author):
 
 
 def score_social_media_profile(profile_url, author_name):
-    score = 0
+    score = 1
 
     # Check if the profile handle or username contains the author's name
     if author_name.lower() in profile_url.lower():
@@ -122,57 +122,63 @@ def get_author_contact(author_name):
         # format_query_string(author_name, "goodreads author"),
         # Add more relevant queries
     ]
-
-    # try:
-    #     social_media_profiles = extract_social_media_profiles(author_name)
-    # except Exception as e:
-    #     print(f"An error occurred while extracting social media profiles for {author_name}: {e}")
-    #     social_media_profiles = []
-
+    social_media_profiles = []
     contacts = []
-       
-    # for profile_name, profile_url in social_media_profiles:
-    #     score = score_social_media_profile(
-    #         profile_url, author_name)
-    #     if score > 0:
-    #         contacts.append(
-    #             {"type": "social_media", "name": profile_name, "url": profile_url, "confidence": score})
 
-   # Use a ThreadPoolExecutor to make the Google Search requests in parallel
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_query = {executor.submit(google_search, query): query for query in queries}
-        for future in concurrent.futures.as_completed(future_to_query):
-            query = future_to_query[future]
-            try:
-                results = future.result()
-            except Exception as e:
-                print(f"Error occurred while processing the query: {query}")
-                continue
-
-            for result in results:
+    try:
+    # Use a ThreadPoolExecutor to make the Google Search requests in parallel
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_query = {executor.submit(google_search, query): query for query in queries}
+            for future in concurrent.futures.as_completed(future_to_query):
+                query = future_to_query[future]
                 try:
-                    url = result["link"]
+                    results = future.result()
+                except Exception as e:
+                    print(f"An unexpected error occurred: {e}")
+                    print(f"Error occurred while processing the query: {query}")
+                    continue
+
+                for result in results:
                     try:
-                        response = requests.get(url, timeout=5)
-                    except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
-                        print(f"Error occurred for url: {url}")
+                        url = result["link"]
+                        try:
+                            response = requests.get(url, timeout=5)
+                        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
+                            print(f"An unexpected error occurred: {e}")
+                            print(f"Error occurred for url: {url}")
+                            print(e)
+                            continue  # Skip the current iteration and move to the next one
+
+                        soup = BeautifulSoup(response.content, "html.parser")
+                        emails = extract_emails(soup)
+
+                        for email in emails:
+                            # score = score_email(email, author_name, None)
+                            # if score > 0:
+                            contacts.append(
+                                {"type": "email", "value": email, "confidence": 1})
+
+                    except HttpError as e:
+                        print(
+                            f"An error occurred while processing the query response url: {url}")
                         print(e)
-                        continue  # Skip the current iteration and move to the next one
+                        # Don't return None, just continue with the next URL
+    except Exception as e:
+        print(f"An error occurred while executing tasks: {e}")
+    
+    try:
+        social_media_profiles = extract_social_media_profiles(author_name)
+    except Exception as e:
+        print(f"An error occurred while extracting social media profiles for {author_name}: {e}")
+        social_media_profiles = []
 
-                    soup = BeautifulSoup(response.content, "html.parser")
-                    emails = extract_emails(soup)
-
-                    for email in emails:
-                        # score = score_email(email, author_name, None)
-                        # if score > 0:
-                        contacts.append(
-                            {"type": "email", "value": email, "confidence": 1})
-
-                except HttpError as e:
-                    print(
-                        f"An error occurred while processing the query response url: {url}")
-                    print(e)
-                    # Don't return None, just continue with the next URL
+       
+    for profile_name, profile_url in social_media_profiles:
+        score = score_social_media_profile(
+            profile_url, author_name)
+        if score > 0:
+            contacts.append(
+                {"type": "social_media", "name": profile_name, "url": profile_url, "confidence": score})
 
     contacts.sort(key=lambda x: x['confidence'], reverse=True)
     valid_contacts = [

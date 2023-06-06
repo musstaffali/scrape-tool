@@ -141,7 +141,7 @@ def store_authors():
                     'created_at': firestore.SERVER_TIMESTAMP
                 })
 
-                contact_info.append(author)
+                contact_info.append(contacts)
 
                 # Add the author to the author map
                 author_map.set({'id': author_id})
