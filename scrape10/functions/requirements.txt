@@ -1,8 +1,0 @@
-firebase-admin
-firebase-functions
-requests
-bs4
-pyhunter
-firebase_admin
-flask
-selenium
